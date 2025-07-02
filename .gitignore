@@ -1,12 +1,12 @@
 # Terraform generated files and directories
-.terraform/           # Terraform's working directory, contains downloaded providers and modules
-*.tfplan              # Terraform plan files (local copies)
-*.tfstate             # Terraform state files (local copies, even with S3 backend)
-*.tfstate.backup      # Terraform state backup files
-crash.log             # Terraform crash logs
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.backup
+crash.log
 
 # Editor/IDE specific files that might appear here
-.idea/                # IntelliJ IDEA / PyCharm
-.vscode/              # VS Code
-.DS_Store             # macOS specific files
-*~                    # Backup files created by some editors
+.idea/
+.vscode/
+.DS_Store
+*~
