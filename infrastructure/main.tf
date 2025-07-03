@@ -170,3 +170,21 @@ resource "aws_iam_role_policy" "textract-service-publish-policy" {
     ]
   })
 }
+
+resource "aws_lambda_function" "orchestrator-lambda" {
+  function_name = "DocuInsight-Orchestrator-Lambda"
+  role          = aws_iam_role.orchestrator-lambda-role.arn
+  handler       = "lambda_function.handler"
+  runtime       = "python3.12"
+  timeout       = 900
+
+  environment {
+    variables = {
+      TEXTRACT_OUTPUT_S3_BUCKET = aws_s3_bucket.textract-output-bucket.bucket
+      TEXTRACT_SNS_TOPIC_ARN    = aws_sns_topic.textract-notification-topic.arn
+      TEXTRACT_SNS_TOPIC_ROLE_ARN = aws_iam_role.textract-service-publish-role.arn
+    }
+  }
+  filename         = "../src/orchestrator_lambda/lambda_function.zip"
+  source_code_hash = filebase64sha256("../src/orchestrator_lambda/lambda_function.zip")
+}
