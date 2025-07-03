@@ -41,3 +41,10 @@ resource "aws_dynamodb_table" "document-metadata-table" {
     Name = "DocuInsight-Document-Metadata"
   }
 }
+
+resource "aws_sns_topic" "textract-notification-topic" {
+  name = "DocuInsight-Textract-Notification-Topic"
+  tags = {
+    Name = "DocuInsight-Textract-Notification-Topic"
+  }
+}
