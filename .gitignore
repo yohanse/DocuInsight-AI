@@ -10,3 +10,10 @@ crash.log
 .vscode/
 .DS_Store
 *~
+
+# python specific files
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
