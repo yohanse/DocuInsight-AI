@@ -67,3 +67,55 @@ resource "aws_iam_role" "orchestrator-lambda-role" {
     }]
   })
 }
+
+resource "aws_iam_role_policy" "orchestrator-lambda-policy" {
+  name = "DocuInsight-Orchestrator-Lambda-Policy"
+  role = aws_iam_role.orchestrator-lambda-role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "s3:*"
+        ]
+        Effect = "Allow"
+        Resource = [
+          aws_s3_bucket.document-input-bucket.arn,
+          "${aws_s3_bucket.document-input-bucket.arn}/*",
+
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = ["s3:*"],
+        Resource = [
+          aws_s3_bucket.textract-output-bucket.arn,
+          "${aws_s3_bucket.textract-output-bucket.arn}/*",
+
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "textract:StartDocumentAnalysis",
+          "textract:GetDocumentAnalysis",
+          "textract:GetDocumentTextDetection",
+          "textract:StartDocumentTextDetection"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = [
+          aws_cloudwatch_log_group.orchestrator-lambda-log-group.arn,
+          "${aws_cloudwatch_log_group.orchestrator-lambda-log-group.arn}:*"
+        ]
+      }
+    ]
+  })
+}
