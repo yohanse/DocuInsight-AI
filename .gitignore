@@ -1,0 +1,22 @@
+# Terraform generated files and directories
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.backup
+crash.log
+
+# Editor/IDE specific files that might appear here
+.idea/
+.vscode/
+.DS_Store
+*~
+
+# python specific files
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+
+# Zip files
+lambda_function.zip
