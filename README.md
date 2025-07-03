@@ -22,42 +22,7 @@ How it's Built (The Techy Bits)
 This project uses a bunch of AWS services, and I'm using Terraform for all the infrastructure stuff, and GitHub Actions for CI/CD. It's a proper setup, even if it's just me working on it!
 
 Architecture (Rough Sketch, imagine a cool diagram here!)
-+----------------+     +-----------------------+     +----------------------+
-|    User Upload | --> | S3 Input Bucket (Doc) | --> | S3 Event Notification|
-+----------------+     +-----------------------+     +----------------------+
-                                   |
-                                   V
-+--------------------------+     +-----------------------+
-| AWS Lambda (Orchestrator)| --> | SQS Queue (Textract Job)|
-+--------------------------+     +-----------------------+
-           |                                 |
-           V                                 V
-+--------------------------+     +-----------------------+
-| Amazon Textract          | --> | S3 Output Bucket (JSON)|
-+--------------------------+     +-----------------------+
-           |
-           V (Textract Completion Notification)
-+--------------------------+
-| AWS Lambda (Processor)   |
-+--------------------------+
-           |
-           V
-+--------------------------+     +-----------------------+
-| Amazon SageMaker         | --> | Amazon OpenSearch     |
-| (Serverless Embeddings)  |     | (Vector & Full-Text)  |
-+--------------------------+     +-----------------------+
-           |                                 ^
-           V                                 |
-+--------------------------+                 |
-| Amazon DynamoDB          |                 |
-| (Metadata Storage)       |                 |
-+--------------------------+                 |
-                                             |
-+--------------------------+     +-----------------------+
-| User Query (API Gateway) | --> | AWS Lambda (Query API)|
-+--------------------------+     +-----------------------+
-
-(Yeah, I know, I need to make a proper diagram. It's on the list!)
+![Alt text for the image](DocuInsight-aws-diagram.drawio.png)
 
 Technologies Used
 Cloud Platform: AWS (Amazon Web Services)
