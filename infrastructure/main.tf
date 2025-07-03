@@ -119,3 +119,54 @@ resource "aws_iam_role_policy" "orchestrator-lambda-policy" {
     ]
   })
 }
+
+resource "aws_iam_role" "textract-service-publish-role" {
+  name = "TextractServicePublishRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "textract.amazonaws.com"
+      }
+    },
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "textract-service-publish-policy" {
+  name = "TextractServicePublishPolicy"
+  role = aws_iam_role.textract-service-publish-role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = [
+          "s3:*"
+        ]
+        Effect = "Allow"
+        Resource = [
+          aws_s3_bucket.document-input-bucket.arn,
+          "${aws_s3_bucket.document-input-bucket.arn}/*",
+
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = ["s3:*"],
+        Resource = [
+          aws_s3_bucket.textract-output-bucket.arn,
+          "${aws_s3_bucket.textract-output-bucket.arn}/*",
+
+        ]
+      },
+      {
+        Effect = "Allow",
+        Action = ["sns:Publish"],
+        Resource = aws_sns_topic.textract-notification-topic.arn
+      }
+    ]
+  })
+}
