@@ -197,3 +197,21 @@ resource "aws_lambda_permission" "allow-s3-to-trigger-orchestrator-lambda" {
 
   source_arn = aws_s3_bucket.document-input-bucket.arn
 }
+
+resource "aws_s3_bucket_policy" "document-input-bucket-policy" {
+  bucket = aws_s3_bucket.document-input-bucket.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "textract.amazonaws.com"
+        }
+        Action = "s3:GetObject"
+        Resource = "${aws_s3_bucket.document-input-bucket.arn}/*"
+      }
+    ]
+  })
+}
