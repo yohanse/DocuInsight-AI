@@ -26,3 +26,18 @@ resource "aws_s3_bucket" "textract-output-bucket" {
     Name = "DocuInsight-Textract-Output-Bucket"
   }
 }
+
+resource "aws_dynamodb_table" "document-metadata-table" {
+  name         = "DocuInsight-Document-Metadata"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "document_id"
+
+  attribute {
+    name = "document_id"
+    type = "S"
+  }
+
+  tags = {
+    Name = "DocuInsight-Document-Metadata"
+  }
+}
