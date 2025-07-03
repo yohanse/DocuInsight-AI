@@ -17,3 +17,6 @@ __pycache__/
 *.pyo
 venv/
 .env
+
+# Zip files
+lambda_function.zip
