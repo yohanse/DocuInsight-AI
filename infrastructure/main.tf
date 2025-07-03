@@ -188,3 +188,12 @@ resource "aws_lambda_function" "orchestrator-lambda" {
   filename         = "../src/orchestrator_lambda/lambda_function.zip"
   source_code_hash = filebase64sha256("../src/orchestrator_lambda/lambda_function.zip")
 }
+
+resource "aws_lambda_permission" "allow-s3-to-trigger-orchestrator-lambda" {
+  statement_id  = "AllowS3ToInvokeOrchestratorLambda"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.orchestrator-lambda.arn
+  principal     = "s3.amazonaws.com"
+
+  source_arn = aws_s3_bucket.document-input-bucket.arn
+}
