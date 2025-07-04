@@ -264,3 +264,13 @@ resource "aws_sqs_queue" "textract-notification-queue" {
     Name = "DocuInsight-Textract-Notification-Queue"
   }
 }
+
+resource "aws_sns_topic_subscription" "textract-notification-subscription" {
+  topic_arn = aws_sns_topic.textract-notification-topic.arn
+  protocol  = "sqs"
+  endpoint  = aws_sqs_queue.textract-notification-queue.arn
+
+  filter_policy = jsonencode({
+    event_type = ["TEXTRACT_JOB_COMPLETED"]
+  })
+}
