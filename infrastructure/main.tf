@@ -27,6 +27,18 @@ resource "aws_s3_bucket" "textract-output-bucket" {
   }
 }
 
+resource "aws_s3_bucket_cors_configuration" "textract-output-bucket-cors" {
+  bucket = aws_s3_bucket.textract-output-bucket.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "PUT", "POST", "DELETE", "HEAD"]
+    allowed_origins = ["*"]
+    expose_headers  = []
+    max_age_seconds = 3000
+  }
+}
+
 resource "aws_dynamodb_table" "document-metadata-table" {
   name         = "DocuInsight-Document-Metadata"
   billing_mode = "PAY_PER_REQUEST"
