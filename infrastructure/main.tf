@@ -257,3 +257,43 @@ resource "aws_s3_bucket_policy" "textract-output-bucket-policy" {
     ]
   })
 }
+
+resource "aws_sqs_queue" "textract-notification-queue" {
+  name = "DocuInsight-Textract-Notification-Queue"
+  tags = {
+    Name = "DocuInsight-Textract-Notification-Queue"
+  }
+}
+
+resource "aws_sns_topic_subscription" "textract-notification-subscription" {
+  topic_arn = aws_sns_topic.textract-notification-topic.arn
+  protocol  = "sqs"
+  endpoint  = aws_sqs_queue.textract-notification-queue.arn
+
+  filter_policy = jsonencode({
+    event_type = ["TEXTRACT_JOB_COMPLETED"]
+  })
+}
+
+resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
+  queue_url = aws_sqs_queue.textract-notification-queue.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "sns.amazonaws.com"
+        }
+        Action = "sqs:SendMessage"
+        Resource = aws_sqs_queue.textract-notification-queue.arn
+        Condition = {
+          ArnEquals = {
+            "aws:SourceArn" = aws_sns_topic.textract-notification-topic.arn
+          }
+        }
+      }
+    ]
+  })
+}
