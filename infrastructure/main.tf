@@ -274,3 +274,26 @@ resource "aws_sns_topic_subscription" "textract-notification-subscription" {
     event_type = ["TEXTRACT_JOB_COMPLETED"]
   })
 }
+
+resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
+  queue_url = aws_sqs_queue.textract-notification-queue.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "sns.amazonaws.com"
+        }
+        Action = "sqs:SendMessage"
+        Resource = aws_sqs_queue.textract-notification-queue.arn
+        Condition = {
+          ArnEquals = {
+            "aws:SourceArn" = aws_sns_topic.textract-notification-topic.arn
+          }
+        }
+      }
+    ]
+  })
+}
