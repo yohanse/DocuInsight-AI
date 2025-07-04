@@ -257,3 +257,10 @@ resource "aws_s3_bucket_policy" "textract-output-bucket-policy" {
     ]
   })
 }
+
+resource "aws_sqs_queue" "textract-notification-queue" {
+  name = "DocuInsight-Textract-Notification-Queue"
+  tags = {
+    Name = "DocuInsight-Textract-Notification-Queue"
+  }
+}
