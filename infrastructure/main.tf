@@ -142,7 +142,7 @@ resource "aws_iam_role" "textract-service-publish-role" {
       Principal = {
         Service = "textract.amazonaws.com"
       }
-    },
+      },
     ]
   })
 }
@@ -175,8 +175,8 @@ resource "aws_iam_role_policy" "textract-service-publish-policy" {
         ]
       },
       {
-        Effect = "Allow",
-        Action = ["sns:Publish"],
+        Effect   = "Allow",
+        Action   = ["sns:Publish"],
         Resource = aws_sns_topic.textract-notification-topic.arn
       }
     ]
@@ -192,8 +192,8 @@ resource "aws_lambda_function" "orchestrator-lambda" {
 
   environment {
     variables = {
-      TEXTRACT_OUTPUT_S3_BUCKET = aws_s3_bucket.textract-output-bucket.bucket
-      TEXTRACT_SNS_TOPIC_ARN    = aws_sns_topic.textract-notification-topic.arn
+      TEXTRACT_OUTPUT_S3_BUCKET   = aws_s3_bucket.textract-output-bucket.bucket
+      TEXTRACT_SNS_TOPIC_ARN      = aws_sns_topic.textract-notification-topic.arn
       TEXTRACT_SNS_TOPIC_ROLE_ARN = aws_iam_role.textract-service-publish-role.arn
     }
   }
@@ -217,7 +217,7 @@ resource "aws_s3_bucket_notification" "orchestrator-trigger" {
     lambda_function_arn = aws_lambda_function.orchestrator-lambda.arn
     events              = ["s3:ObjectCreated:*"]
   }
-    depends_on = [
+  depends_on = [
     aws_lambda_permission.allow-s3-to-trigger-orchestrator-lambda
   ]
 }
@@ -233,7 +233,7 @@ resource "aws_s3_bucket_policy" "document-input-bucket-policy" {
         Principal = {
           Service = "textract.amazonaws.com"
         }
-        Action = "s3:GetObject"
+        Action   = "s3:GetObject"
         Resource = "${aws_s3_bucket.document-input-bucket.arn}/*"
       }
     ]
@@ -251,7 +251,7 @@ resource "aws_s3_bucket_policy" "textract-output-bucket-policy" {
         Principal = {
           Service = "textract.amazonaws.com"
         }
-        Action = "s3:PutObject"
+        Action   = "s3:PutObject"
         Resource = "${aws_s3_bucket.textract-output-bucket.arn}/*"
       }
     ]
@@ -286,7 +286,7 @@ resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
         Principal = {
           Service = "sns.amazonaws.com"
         }
-        Action = "sqs:SendMessage"
+        Action   = "sqs:SendMessage"
         Resource = aws_sqs_queue.textract-notification-queue.arn
         Condition = {
           ArnEquals = {
@@ -297,3 +297,86 @@ resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
     ]
   })
 }
+
+resource "aws_ecr_repository" "sagemaker-embeddings-repo" {
+  name                 = "docuinsight-sagemaker-model-repo"
+  image_tag_mutability = "MUTABLE"
+  tags = {
+    Name = "DocuInsight-SageMaker-Model-Repo"
+  }
+}
+resource "aws_iam_role" "sagemaker-execution-role" {
+  name = "docuinsight-sagemaker-execution-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "sagemaker.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "docuinsight-sagemaker-execution-role"
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "sagemaker-ecr-policy" {
+  role       = aws_iam_role.sagemaker-execution-role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly" # Allows pulling from ECR
+}
+
+resource "aws_iam_role_policy_attachment" "sagemaker-cloudwatch-logs_policy" {
+  role       = aws_iam_role.sagemaker-execution-role.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess" # For logging (can be more restrictive)
+}
+
+
+resource "aws_sagemaker_model" "embeddings-model" {
+  name               = "docuinsight-embeddings-model"
+  execution_role_arn = aws_iam_role.sagemaker-execution-role.arn
+
+  primary_container {
+    image = "${aws_ecr_repository.sagemaker-embeddings-repo.repository_url}:latest"
+
+  }
+
+  tags = {
+    Name = "docuinsight-embeddings-model"
+  }
+}
+
+resource "aws_sagemaker_endpoint_configuration" "embeddings-endpoint-config" {
+  name = "docuinsight-embeddings-endpoint-config"
+
+  production_variants {
+    variant_name = "default"
+    model_name   = aws_sagemaker_model.embeddings-model.name
+
+    # Crucial for Serverless Inference:
+    serverless_config {
+      memory_size_in_mb = 2048
+      max_concurrency   = 1
+    }
+  }
+
+  tags = {
+    Name = "docuinsight-embeddings-endpoint-config"
+  }
+}
+
+resource "aws_sagemaker_endpoint" "embeddings-endpoint" {
+  name                 = "docuinsight-embeddings-endpoint"
+  endpoint_config_name = aws_sagemaker_endpoint_configuration.embeddings-endpoint-config.name
+
+  tags = {
+    Name      = "docuinsight-embeddings-endpoint"
+  }
+}
+
+
