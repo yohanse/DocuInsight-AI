@@ -1,0 +1,3 @@
+#!/bin/bash
+# Simple serve script to run Flask app
+exec python app.py
