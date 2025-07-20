@@ -514,7 +514,8 @@ resource "aws_iam_role_policy" "processor-lambda-policy" {
       {
         Effect = "Allow",
         Action = [
-          "aoss:*" # Required for data plane access to OpenSearch Serverless
+          "aoss:*",
+          "es:*"
         ],
         Resource = [
           aws_opensearchserverless_collection.document-search-domain.arn, # Correct resource block name and .arn
@@ -613,7 +614,7 @@ resource "aws_opensearchserverless_access_policy" "document_search_data_access_p
       Rules = [
         {
           Resource = [
-            aws_opensearchserverless_collection.document-search-domain.arn
+            "collection/${aws_opensearchserverless_collection.document-search-domain.name}"
           ],
           Permission = [
             "aoss:*"
@@ -622,7 +623,7 @@ resource "aws_opensearchserverless_access_policy" "document_search_data_access_p
         },
         {
           Resource = [
-            "${aws_opensearchserverless_collection.document-search-domain.arn}/*"
+            "index/${aws_opensearchserverless_collection.document-search-domain.name}/*"
           ],
           Permission = [
             "aoss:*"
@@ -631,7 +632,7 @@ resource "aws_opensearchserverless_access_policy" "document_search_data_access_p
         }
       ],
       
-      Principal = [aws_iam_role.processor-lambda-role.arn],
+      Principal = ["${aws_iam_role.processor-lambda-role.arn}"],
     }
   ])
 }
@@ -652,5 +653,6 @@ resource "aws_opensearchserverless_security_policy" "document_search_network_pol
     }
   ])
 }
+
 
 
