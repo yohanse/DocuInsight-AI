@@ -61,6 +61,46 @@ resource "aws_sns_topic" "textract-notification-topic" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
+resource "aws_sns_topic_policy" "textract_sns_topic_policy" {
+  arn = aws_sns_topic.textract-notification-topic.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Sid = "AllowSNSPublish",
+        Effect = "Allow",
+        Principal = {
+          Service = "sns.amazonaws.com" # Allow SNS service to publish
+        },
+        Action = "sns:Publish",
+        Resource = aws_sns_topic.textract-notification-topic.arn,
+        Condition = {
+          StringEquals = {
+            "aws:SourceOwner" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      {
+        Sid = "AllowTextractPublish",
+        Effect = "Allow",
+        Principal = {
+          Service = "textract.amazonaws.com" # Explicitly allow Textract to publish
+        },
+        Action = "sns:Publish",
+        Resource = aws_sns_topic.textract-notification-topic.arn,
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "orchestrator-lambda-log-group" {
   name              = "/aws/lambda/DocuInsight-Orchestrator-Lambda"
   retention_in_days = 14
@@ -258,8 +298,17 @@ resource "aws_s3_bucket_policy" "textract-output-bucket-policy" {
   })
 }
 
+resource "aws_sqs_queue" "lambda_dlq" {
+  name = "lambda-dead-letter-queue"
+}
 resource "aws_sqs_queue" "textract-notification-queue" {
   name = "DocuInsight-Textract-Notification-Queue"
+  visibility_timeout_seconds = 200
+
+  redrive_policy = jsonencode({
+    deadLetterTargetArn = aws_sqs_queue.lambda_dlq.arn
+    maxReceiveCount     = 2
+  })
   tags = {
     Name = "DocuInsight-Textract-Notification-Queue"
   }
@@ -269,11 +318,14 @@ resource "aws_sns_topic_subscription" "textract-notification-subscription" {
   topic_arn = aws_sns_topic.textract-notification-topic.arn
   protocol  = "sqs"
   endpoint  = aws_sqs_queue.textract-notification-queue.arn
-
-  filter_policy = jsonencode({
-    event_type = ["TEXTRACT_JOB_COMPLETED"]
-  })
 }
+
+resource "aws_sns_topic_subscription" "email-notification-subscription" {
+  topic_arn = aws_sns_topic.textract-notification-topic.arn
+  protocol  = "email"
+  endpoint  = "mehabawyohanse@gmail.com"
+}
+
 
 resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
   queue_url = aws_sqs_queue.textract-notification-queue.id
@@ -301,6 +353,7 @@ resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
 resource "aws_ecr_repository" "sagemaker-embeddings-repo" {
   name                 = "docuinsight-sagemaker-model-repo"
   image_tag_mutability = "MUTABLE"
+  force_delete = true
   tags = {
     Name = "DocuInsight-SageMaker-Model-Repo"
   }
@@ -375,8 +428,229 @@ resource "aws_sagemaker_endpoint" "embeddings-endpoint" {
   endpoint_config_name = aws_sagemaker_endpoint_configuration.embeddings-endpoint-config.name
 
   tags = {
-    Name      = "docuinsight-embeddings-endpoint"
+    Name = "docuinsight-embeddings-endpoint"
   }
+}
+
+# --- IAM Role for Processor Lambda ---
+resource "aws_iam_role" "processor-lambda-role" {
+  name = "docuinsight-processor-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "docuinsight-processor-lambda-role"
+  }
+}
+
+resource "aws_iam_role_policy" "processor-lambda-policy" {
+  name = "docuinsight-processor-lambda-policy"
+  role = aws_iam_role.processor-lambda-role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+    "logs:CreateLogStream",
+    "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      },
+      {
+        Action = [
+          "sqs:ReceiveMessage",
+          "sqs:DeleteMessage",
+          "sqs:GetQueueAttributes"
+        ],
+        Effect   = "Allow",
+        Resource = aws_sqs_queue.textract-notification-queue.arn
+      },
+      {
+        Action = [
+          "textract:GetDocumentAnalysis"
+        ],
+        Effect   = "Allow",
+        Resource = "*"
+      },
+      {
+        Action = [
+          "s3:GetObject"
+        ],
+        Effect   = "Allow",
+        Resource = "${aws_s3_bucket.textract-output-bucket.arn}/*" # Allow reading from Textract output bucket
+      },
+      {
+        Action = [
+          "sagemaker:InvokeEndpoint"
+        ],
+        Effect   = "Allow",
+        Resource = aws_sagemaker_endpoint.embeddings-endpoint.arn # Allow invoking your SageMaker endpoint
+      },
+      # Placeholder for DynamoDB permissions (will enable later)
+      # {
+      #   Action = [
+      #     "dynamodb:PutItem",
+      #     "dynamodb:UpdateItem",
+      #     "dynamodb:GetItem"
+      #   ],
+      #   Effect   = "Allow",
+      #   Resource = aws_dynamodb_table.document_metadata.arn
+      # },
+      # Placeholder for OpenSearch permissions (will enable later)
+      {
+        Effect = "Allow",
+        Action = [
+          "aoss:*" # Required for data plane access to OpenSearch Serverless
+        ],
+        Resource = [
+          aws_opensearchserverless_collection.document-search-domain.arn, # Correct resource block name and .arn
+          "${aws_opensearchserverless_collection.document-search-domain.arn}/*" # For collection and index access
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_layer_version" "numpy-layer" {
+  filename            = "../src/numpy-layer/lambda-layer.zip"
+  layer_name          = "numpy"
+  compatible_runtimes = ["python3.12"]
+
+  source_code_hash    = filebase64sha256("../src/numpy-layer/lambda-layer.zip")
+}
+resource "aws_lambda_function" "processor-lambda" {
+  function_name = "docuinsight-processor-lambda"
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.12"
+  role          = aws_iam_role.processor-lambda-role.arn
+  timeout       = 180  # Increased timeout for potential cold starts and processing
+  memory_size   = 1024 # Start with 1GB memory
+  # Reference the manually created zip file
+  filename         = "../src/processor_lambda/lambda_function.zip"
+  source_code_hash = filebase64sha256("../src/processor_lambda/lambda_function.zip")
+  layers = [
+    aws_lambda_layer_version.numpy-layer.arn, # Include the numpy layer
+  ]
+
+  environment {
+    variables = {
+      SAGEMAKER_ENDPOINT_NAME = aws_sagemaker_endpoint.embeddings-endpoint.name
+      # DYNAMODB_TABLE_NAME     = aws_dynamodb_table.document_metadata.name # Placeholder
+      OPENSEARCH_DOMAIN_ENDPOINT = replace(aws_opensearchserverless_collection.document-search-domain.collection_endpoint, "https://", "")
+      LOG_LEVEL = "INFO"
+    }
+  }
+
+  tags = {
+    Name = "docuinsight-processor-lambda"
+  }
+}
+resource "aws_lambda_event_source_mapping" "processor-lambda-sqs-trigger" {
+  event_source_arn = aws_sqs_queue.textract-notification-queue.arn
+  function_name    = aws_lambda_function.processor-lambda.arn
+  batch_size       = 1 # Process one SQS message at a time for now
+  enabled          = true
+  depends_on = [
+    aws_lambda_function.processor-lambda,
+    aws_sqs_queue.textract-notification-queue,
+    aws_lambda_permission.allow-sqs-to-invoke-processor-lambda
+  ]
+
+}
+
+resource "aws_lambda_permission" "allow-sqs-to-invoke-processor-lambda" {
+  statement_id  = "AllowExecutionFromSQS"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.processor-lambda.function_name
+  principal     = "sqs.amazonaws.com"
+  source_arn    = aws_sqs_queue.textract-notification-queue.arn
+}
+
+resource "aws_opensearchserverless_security_policy" "document_search_encryption_policy" {
+  name        = "docu-search-encryption-policy"
+  type        = "encryption"
+  description = "Encryption policy for the docuinsight search collection"
+
+  policy = jsonencode({
+    Rules = [
+      {
+        ResourceType = "collection",
+        Resource     = ["collection/docuinsight-search-collection"]
+      }
+    ],
+    AWSOwnedKey = true
+  })
+}
+
+resource "aws_opensearchserverless_collection" "document-search-domain" {
+  name = "docuinsight-search-collection"
+  type = "SEARCH" 
+
+  tags = {
+    Name = "DocuInsight-Document-Search-Collection"
+  }
+}
+
+resource "aws_opensearchserverless_access_policy" "document_search_data_access_policy" {
+  name = "docuinsight-search-policy"
+  type = "data"
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          Resource = [
+            aws_opensearchserverless_collection.document-search-domain.arn
+          ],
+          Permission = [
+            "aoss:*"
+          ],
+          ResourceType = "collection"
+        },
+        {
+          Resource = [
+            "${aws_opensearchserverless_collection.document-search-domain.arn}/*"
+          ],
+          Permission = [
+            "aoss:*"
+          ],
+          ResourceType = "index"
+        }
+      ],
+      
+      Principal = [aws_iam_role.processor-lambda-role.arn],
+    }
+  ])
+}
+
+resource "aws_opensearchserverless_security_policy" "document_search_network_policy" {
+  name = "docuinsight-search-policy"
+  type = "network"
+  policy = jsonencode([
+    {
+      Rules = [
+        {
+          ResourceType = "collection",
+          Resource     = ["collection/docuinsight-search-collection"]
+        }
+      ],
+      AllowFromPublic  = true,
+      Description      = "Allow Lambda service to access collection"
+    }
+  ])
 }
 
 
