@@ -27,6 +27,7 @@ def get_awsauth(region, service):
     Returns an AWS4Auth object for signing requests to AWS services.
     """
     credentials = boto3.Session().get_credentials()
+    logger.info(f"Retrieved AWS credentials: {credentials}")
     return AWS4Auth(credentials.access_key,
                     credentials.secret_key,
                     region,
@@ -42,12 +43,13 @@ def lambda_handler(event, context):
     print("Processor Lambda invoked!")
     logger.info(f"Received event: {json.dumps(event)}")
     print(f"Received event: {json.dumps(event)}")
+    
     # Process each record from the SQS event
     for record in event['Records']:
         try:
             # SQS message body contains the SNS notification
             message_body = json.loads(record['body'])
-            sns_message = json.loads(message_body['Message'])  # This is the actual payload
+            sns_message = json.loads(message_body['Message']) # This is the actual payload
 
 
             job_status = sns_message['Status']
@@ -132,17 +134,18 @@ def lambda_handler(event, context):
                 #     }
                 # )
                 logger.info("DynamoDB storage placeholder executed.")
-
-                
+                logger.info("Initializing OpenSearch client...")
                 opensearch_client = OpenSearch(
                     hosts = [{'host': OPENSEARCH_DOMAIN_ENDPOINT, 'port': 443}],
-                    http_auth = get_awsauth('us-east-1', 'es'), # Needs proper AWS SigV4 auth
+                    http_auth = get_awsauth('us-east-1', 'aoss'), # Needs proper AWS SigV4 auth
                     use_ssl = True,
                     verify_certs = True,
                     connection_class = RequestsHttpConnection
                 )
+                logger.info("OpenSearch client initialized.")
+                logger.info("Indexing into OpenSearch...")
                 opensearch_client.index(
-                    index = 'your_document_index',
+                    index = 'index',
                     body = {
                         'document_id': job_id,
                         'text_content': full_text,
