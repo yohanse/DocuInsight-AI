@@ -137,7 +137,7 @@ def lambda_handler(event, context):
                 logger.info("Initializing OpenSearch client...")
                 opensearch_client = OpenSearch(
                     hosts = [{'host': OPENSEARCH_DOMAIN_ENDPOINT, 'port': 443}],
-                    http_auth = get_awsauth('us-east-1', 'aoss'), # Needs proper AWS SigV4 auth
+                    http_auth = get_awsauth('us-east-1', 'es'), # Needs proper AWS SigV4 auth
                     use_ssl = True,
                     verify_certs = True,
                     connection_class = RequestsHttpConnection

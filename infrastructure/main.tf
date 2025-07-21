@@ -70,12 +70,12 @@ resource "aws_sns_topic_policy" "textract_sns_topic_policy" {
     Version = "2012-10-17",
     Statement = [
       {
-        Sid = "AllowSNSPublish",
+        Sid    = "AllowSNSPublish",
         Effect = "Allow",
         Principal = {
           Service = "sns.amazonaws.com" # Allow SNS service to publish
         },
-        Action = "sns:Publish",
+        Action   = "sns:Publish",
         Resource = aws_sns_topic.textract-notification-topic.arn,
         Condition = {
           StringEquals = {
@@ -84,12 +84,12 @@ resource "aws_sns_topic_policy" "textract_sns_topic_policy" {
         }
       },
       {
-        Sid = "AllowTextractPublish",
+        Sid    = "AllowTextractPublish",
         Effect = "Allow",
         Principal = {
           Service = "textract.amazonaws.com" # Explicitly allow Textract to publish
         },
-        Action = "sns:Publish",
+        Action   = "sns:Publish",
         Resource = aws_sns_topic.textract-notification-topic.arn,
         Condition = {
           StringEquals = {
@@ -302,7 +302,7 @@ resource "aws_sqs_queue" "lambda_dlq" {
   name = "lambda-dead-letter-queue"
 }
 resource "aws_sqs_queue" "textract-notification-queue" {
-  name = "DocuInsight-Textract-Notification-Queue"
+  name                       = "DocuInsight-Textract-Notification-Queue"
   visibility_timeout_seconds = 200
 
   redrive_policy = jsonencode({
@@ -353,7 +353,7 @@ resource "aws_sqs_queue_policy" "textract-notification-queue-policy" {
 resource "aws_ecr_repository" "sagemaker-embeddings-repo" {
   name                 = "docuinsight-sagemaker-model-repo"
   image_tag_mutability = "MUTABLE"
-  force_delete = true
+  force_delete         = true
   tags = {
     Name = "DocuInsight-SageMaker-Model-Repo"
   }
@@ -424,7 +424,7 @@ resource "aws_sagemaker_endpoint_configuration" "embeddings-endpoint-config" {
 }
 
 resource "aws_sagemaker_endpoint" "embeddings-endpoint" {
-  name                 = "docuinsight-embeddings-endpoint"
+  name                 = "docuinsight-embeddings-endpoint-v2"
   endpoint_config_name = aws_sagemaker_endpoint_configuration.embeddings-endpoint-config.name
 
   tags = {
@@ -465,8 +465,8 @@ resource "aws_iam_role_policy" "processor-lambda-policy" {
         Effect = "Allow"
         Action = [
           "logs:CreateLogGroup",
-    "logs:CreateLogStream",
-    "logs:PutLogEvents"
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
         ]
         Resource = "*"
       },
@@ -514,12 +514,11 @@ resource "aws_iam_role_policy" "processor-lambda-policy" {
       {
         Effect = "Allow",
         Action = [
-          "aoss:*",
           "es:*"
         ],
         Resource = [
-          aws_opensearchserverless_collection.document-search-domain.arn, # Correct resource block name and .arn
-          "${aws_opensearchserverless_collection.document-search-domain.arn}/*" # For collection and index access
+          aws_opensearch_domain.document-search-domain.arn,       # Correct resource block name and .arn
+          "${aws_opensearch_domain.document-search-domain.arn}/*" # For collection and index access
         ]
       }
     ]
@@ -531,7 +530,7 @@ resource "aws_lambda_layer_version" "numpy-layer" {
   layer_name          = "numpy"
   compatible_runtimes = ["python3.12"]
 
-  source_code_hash    = filebase64sha256("../src/numpy-layer/lambda-layer.zip")
+  source_code_hash = filebase64sha256("../src/numpy-layer/lambda-layer.zip")
 }
 resource "aws_lambda_function" "processor-lambda" {
   function_name = "docuinsight-processor-lambda"
@@ -551,8 +550,8 @@ resource "aws_lambda_function" "processor-lambda" {
     variables = {
       SAGEMAKER_ENDPOINT_NAME = aws_sagemaker_endpoint.embeddings-endpoint.name
       # DYNAMODB_TABLE_NAME     = aws_dynamodb_table.document_metadata.name # Placeholder
-      OPENSEARCH_DOMAIN_ENDPOINT = replace(aws_opensearchserverless_collection.document-search-domain.collection_endpoint, "https://", "")
-      LOG_LEVEL = "INFO"
+      OPENSEARCH_DOMAIN_ENDPOINT = replace(aws_opensearch_domain.document-search-domain.endpoint, "https://", "")
+      LOG_LEVEL                  = "INFO"
     }
   }
 
@@ -581,78 +580,89 @@ resource "aws_lambda_permission" "allow-sqs-to-invoke-processor-lambda" {
   source_arn    = aws_sqs_queue.textract-notification-queue.arn
 }
 
-resource "aws_opensearchserverless_security_policy" "document_search_encryption_policy" {
-  name        = "docu-search-encryption-policy"
-  type        = "encryption"
-  description = "Encryption policy for the docuinsight search collection"
-
-  policy = jsonencode({
-    Rules = [
-      {
-        ResourceType = "collection",
-        Resource     = ["collection/docuinsight-search-collection"]
-      }
-    ],
-    AWSOwnedKey = true
-  })
-}
-
-resource "aws_opensearchserverless_collection" "document-search-domain" {
-  name = "docuinsight-search-collection"
-  type = "SEARCH" 
-
+# --- New CloudWatch Log Groups for OpenSearch Logs ---
+resource "aws_cloudwatch_log_group" "opensearch_index_slow_logs" {
+  name              = "/aws/opensearch/domains/docuinsight-search-domain/index-slow-logs"
+  retention_in_days = 14 # Adjust retention as needed
   tags = {
-    Name = "DocuInsight-Document-Search-Collection"
+    Name = "DocuInsight-OpenSearch-Index-Slow-Logs"
   }
 }
 
-resource "aws_opensearchserverless_access_policy" "document_search_data_access_policy" {
-  name = "docuinsight-search-policy"
-  type = "data"
-  policy = jsonencode([
-    {
-      Rules = [
-        {
-          Resource = [
-            "collection/${aws_opensearchserverless_collection.document-search-domain.name}"
-          ],
-          Permission = [
-            "aoss:*"
-          ],
-          ResourceType = "collection"
+resource "aws_cloudwatch_log_group" "opensearch_search_slow_logs" {
+  name              = "/aws/opensearch/domains/docuinsight-search-domain/search-slow-logs"
+  retention_in_days = 14 # Adjust retention as needed
+  tags = {
+    Name = "DocuInsight-OpenSearch-Search-Slow-Logs"
+  }
+}
+
+resource "aws_cloudwatch_log_group" "opensearch_audit_logs" {
+  name              = "/aws/opensearch/domains/docuinsight-search-domain/audit-logs"
+  retention_in_days = 14 # Adjust retention as needed
+  tags = {
+    Name = "DocuInsight-OpenSearch-Audit-Logs"
+  }
+}
+
+resource "aws_opensearch_domain" "document-search-domain" {
+  domain_name           = "docuinsight-search-domain" # Must be unique
+  engine_version        = "OpenSearch_2.11" # Choose a recent, stable version
+
+  cluster_config {
+    instance_type = "t3.small.search" # Free Tier eligible instance type
+    instance_count = 1                # For Free Tier, keep at 1
+  }
+
+  ebs_options {
+    ebs_enabled = true
+    volume_type = "gp2" # gp2 is fine for Free Tier
+    volume_size = 10    # 10 GB is Free Tier limit
+  }
+
+  
+  domain_endpoint_options {
+    enforce_https = true
+    tls_security_policy = "Policy-Min-TLS-1-2-2019-07"
+  }
+  log_publishing_options {
+    cloudwatch_log_group_arn = aws_cloudwatch_log_group.opensearch_index_slow_logs.arn
+    log_type                 = "INDEX_SLOW_LOGS"
+    enabled                  = true
+  }
+  log_publishing_options {
+    cloudwatch_log_group_arn = aws_cloudwatch_log_group.opensearch_search_slow_logs.arn
+    log_type                 = "SEARCH_SLOW_LOGS"
+    enabled                  = true
+  }
+  log_publishing_options {
+    cloudwatch_log_group_arn = aws_cloudwatch_log_group.opensearch_audit_logs.arn
+    log_type                 = "AUDIT_LOGS"
+    enabled                  = true
+  }
+
+  tags = {
+    Name = "DocuInsight-Traditional-OpenSearch-Domain"
+  }
+}
+
+resource "aws_opensearch_domain_policy" "document-search-policy" {
+  domain_name = aws_opensearch_domain.document-search-domain.domain_name
+
+  access_policies = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          AWS = aws_iam_role.processor-lambda-role.arn # Allow Processor Lambda role
         },
-        {
-          Resource = [
-            "index/${aws_opensearchserverless_collection.document-search-domain.name}/*"
-          ],
-          Permission = [
-            "aoss:*"
-          ],
-          ResourceType = "index"
-        }
-      ],
-      
-      Principal = ["${aws_iam_role.processor-lambda-role.arn}"],
-    }
-  ])
+        Action = "es:*", # Grant all OpenSearch actions for now (can be refined)
+        Resource = [
+          aws_opensearch_domain.document-search-domain.arn,
+          "${aws_opensearch_domain.document-search-domain.arn}/*" # For index-level permissions
+        ]
+      }
+    ]
+  })
 }
-
-resource "aws_opensearchserverless_security_policy" "document_search_network_policy" {
-  name = "docuinsight-search-policy"
-  type = "network"
-  policy = jsonencode([
-    {
-      Rules = [
-        {
-          ResourceType = "collection",
-          Resource     = ["collection/docuinsight-search-collection"]
-        }
-      ],
-      AllowFromPublic  = true,
-      Description      = "Allow Lambda service to access collection"
-    }
-  ])
-}
-
-
-
