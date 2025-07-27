@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import json
 import boto3
@@ -12,6 +13,7 @@ logger.setLevel(os.environ.get('LOG_LEVEL', 'INFO'))
 
 # Initialize AWS clients
 textract_client = boto3.client('textract')
+dynamodb_client = boto3.client('dynamodb')
 sagemaker_runtime_client = boto3.client('sagemaker-runtime')
 s3_client = boto3.client('s3')
 
@@ -99,6 +101,8 @@ def lambda_handler(event, context):
                 # We will implement proper chunking later.
                 try:
                     # Prepare payload for SageMaker endpoint
+                    logger.info("Invoking SageMaker endpoint...")
+                    logger.info(f"Payload size: {len(full_text)} characters.")
                     sagemaker_payload = {"text": full_text[:500]} # Send only first 500 chars for initial testing
                     
                     # Invoke SageMaker endpoint
@@ -121,18 +125,17 @@ def lambda_handler(event, context):
                     # Update status in DynamoDB, move to DLQ etc.
                     continue
 
-                # --- 3. Store Metadata in DynamoDB (Placeholder for future) ---
-                # Example:
-                # dynamodb_client = boto3.client('dynamodb')
-                # dynamodb_client.put_item(
-                #     TableName=DYNAMODB_TABLE_NAME,
-                #     Item={
-                #         'document_id': {'S': job_id}, # Or a derived ID
-                #         's3_path': {'S': f"s3://{s3_bucket}/{s3_object_key}"},
-                #         'status': {'S': 'EMBEDDINGS_GENERATED'},
-                #         'timestamp': {'S': datetime.now().isoformat()}
-                #     }
-                # )
+               
+                
+                dynamodb_client.put_item(
+                    TableName=DYNAMODB_TABLE_NAME,
+                    Item={
+                        'document_id': {'S': job_id},
+                        's3_path': {'S': f"s3://{s3_bucket}/{s3_object_key}"},
+                        'status': {'S': 'EMBEDDINGS_GENERATED'},
+                        'timestamp': {'S': datetime.now().isoformat()}
+                    }
+                )
                 logger.info("DynamoDB storage placeholder executed.")
                 logger.info("Initializing OpenSearch client...")
                 opensearch_client = OpenSearch(
@@ -144,14 +147,15 @@ def lambda_handler(event, context):
                 )
                 logger.info("OpenSearch client initialized.")
                 logger.info("Indexing into OpenSearch...")
-                opensearch_client.index(
-                    index = 'index',
-                    body = {
-                        'document_id': job_id,
-                        'text_content': full_text,
-                        'embedding': embeddings[0] # Assuming single document embedding
-                    },
-                    id = job_id
+                response = opensearch_client.index(
+                    index='index',  # or your custom index name
+                    id=job_id,
+                    body={
+                        "document_id": job_id,
+                        "text_content": full_text,
+                        "embedding": embeddings[0],
+                        "timestamp": datetime.now()
+                    }
                 )
                 logger.info("OpenSearch indexing placeholder executed.")
 
@@ -174,31 +178,3 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': json.dumps('Processor Lambda execution complete')
     }
-
-# For local testing of Textract parsing logic (optional, requires boto3 setup)
-# if __name__ == '__main__':
-#     # This block is for local development/testing only
-#     # You would mock the SQS event structure here
-#     sample_event = {
-#         "Records": [
-#             {
-#                 "messageId": "msg1",
-#                 "body": json.dumps({
-#                     "Type": "Notification",
-#                     "MessageId": "msgid1",
-#                     "TopicArn": "arn:aws:sns:REGION:ACCOUNT_ID:TEXTRACT_SNS_TOPIC",
-#                     "Message": json.dumps({
-#                         "JobId": "YOUR_TEXTRACT_JOB_ID", # Replace with a real job ID for testing
-#                         "Status": "SUCCEEDED",
-#                         "DocumentLocation": {
-#                             "S3Bucket": "YOUR_S3_BUCKET",
-#                             "S3ObjectName": "YOUR_S3_OBJECT_KEY"
-#                         }
-#                     })
-#                 })
-#             }
-#         ]
-#     }
-#     # Set dummy environment variable for local testing
-#     os.environ['SAGEMAKER_ENDPOINT_NAME'] = 'your-test-sagemaker-endpoint'
-#     lambda_handler(sample_event, None)
