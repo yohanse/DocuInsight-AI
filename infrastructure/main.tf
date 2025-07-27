@@ -500,17 +500,15 @@ resource "aws_iam_role_policy" "processor-lambda-policy" {
         Effect   = "Allow",
         Resource = aws_sagemaker_endpoint.embeddings-endpoint.arn # Allow invoking your SageMaker endpoint
       },
-      # Placeholder for DynamoDB permissions (will enable later)
-      # {
-      #   Action = [
-      #     "dynamodb:PutItem",
-      #     "dynamodb:UpdateItem",
-      #     "dynamodb:GetItem"
-      #   ],
-      #   Effect   = "Allow",
-      #   Resource = aws_dynamodb_table.document_metadata.arn
-      # },
-      # Placeholder for OpenSearch permissions (will enable later)
+      {
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:GetItem"
+        ],
+        Effect   = "Allow",
+        Resource = aws_dynamodb_table.document-metadata-table.arn
+      },
       {
         Effect = "Allow",
         Action = [
@@ -548,8 +546,8 @@ resource "aws_lambda_function" "processor-lambda" {
 
   environment {
     variables = {
-      SAGEMAKER_ENDPOINT_NAME = aws_sagemaker_endpoint.embeddings-endpoint.name
-      # DYNAMODB_TABLE_NAME     = aws_dynamodb_table.document_metadata.name # Placeholder
+      SAGEMAKER_ENDPOINT_NAME    = aws_sagemaker_endpoint.embeddings-endpoint.name
+      DYNAMODB_TABLE_NAME        = aws_dynamodb_table.document-metadata-table.name
       OPENSEARCH_DOMAIN_ENDPOINT = replace(aws_opensearch_domain.document-search-domain.endpoint, "https://", "")
       LOG_LEVEL                  = "INFO"
     }
@@ -580,6 +578,38 @@ resource "aws_lambda_permission" "allow-sqs-to-invoke-processor-lambda" {
   source_arn    = aws_sqs_queue.textract-notification-queue.arn
 }
 
+data "aws_region" "current" {}
+
+resource "aws_cloudwatch_log_resource_policy" "opensearch_log_policy" {
+  policy_name = "OpenSearchLogsPolicy"
+  policy_document = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "es.amazonaws.com"
+        },
+        Action = [
+          "logs:PutLogEvents",
+          "logs:CreateLogStream",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ],
+        Resource = [
+          "${aws_cloudwatch_log_group.opensearch_index_slow_logs.arn}:*",
+          "${aws_cloudwatch_log_group.opensearch_search_slow_logs.arn}:*"
+        ]
+      }
+    ]
+  })
+  depends_on = [
+    aws_cloudwatch_log_group.opensearch_index_slow_logs,
+    aws_cloudwatch_log_group.opensearch_search_slow_logs
+  ]
+}
+
+
 # --- New CloudWatch Log Groups for OpenSearch Logs ---
 resource "aws_cloudwatch_log_group" "opensearch_index_slow_logs" {
   name              = "/aws/opensearch/domains/docuinsight-search-domain/index-slow-logs"
@@ -597,21 +627,13 @@ resource "aws_cloudwatch_log_group" "opensearch_search_slow_logs" {
   }
 }
 
-resource "aws_cloudwatch_log_group" "opensearch_audit_logs" {
-  name              = "/aws/opensearch/domains/docuinsight-search-domain/audit-logs"
-  retention_in_days = 14 # Adjust retention as needed
-  tags = {
-    Name = "DocuInsight-OpenSearch-Audit-Logs"
-  }
-}
-
 resource "aws_opensearch_domain" "document-search-domain" {
-  domain_name           = "docuinsight-search-domain" # Must be unique
-  engine_version        = "OpenSearch_2.11" # Choose a recent, stable version
+  domain_name    = "docuinsight-search-domain" # Must be unique
+  engine_version = "OpenSearch_2.11"           # Choose a recent, stable version
 
   cluster_config {
-    instance_type = "t3.small.search" # Free Tier eligible instance type
-    instance_count = 1                # For Free Tier, keep at 1
+    instance_type  = "t3.small.search" # Free Tier eligible instance type
+    instance_count = 1                 # For Free Tier, keep at 1
   }
 
   ebs_options {
@@ -620,9 +642,9 @@ resource "aws_opensearch_domain" "document-search-domain" {
     volume_size = 10    # 10 GB is Free Tier limit
   }
 
-  
+
   domain_endpoint_options {
-    enforce_https = true
+    enforce_https       = true
     tls_security_policy = "Policy-Min-TLS-1-2-2019-07"
   }
   log_publishing_options {
@@ -635,11 +657,12 @@ resource "aws_opensearch_domain" "document-search-domain" {
     log_type                 = "SEARCH_SLOW_LOGS"
     enabled                  = true
   }
-  log_publishing_options {
-    cloudwatch_log_group_arn = aws_cloudwatch_log_group.opensearch_audit_logs.arn
-    log_type                 = "AUDIT_LOGS"
-    enabled                  = true
-  }
+
+  depends_on = [
+    aws_cloudwatch_log_group.opensearch_index_slow_logs,
+    aws_cloudwatch_log_group.opensearch_search_slow_logs,
+    aws_cloudwatch_log_resource_policy.opensearch_log_policy
+  ]
 
   tags = {
     Name = "DocuInsight-Traditional-OpenSearch-Domain"
@@ -655,7 +678,9 @@ resource "aws_opensearch_domain_policy" "document-search-policy" {
       {
         Effect = "Allow",
         Principal = {
-          AWS = aws_iam_role.processor-lambda-role.arn # Allow Processor Lambda role
+          AWS = [aws_iam_role.processor-lambda-role.arn,
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/development"]
+
         },
         Action = "es:*", # Grant all OpenSearch actions for now (can be refined)
         Resource = [
@@ -666,3 +691,246 @@ resource "aws_opensearch_domain_policy" "document-search-policy" {
     ]
   })
 }
+
+resource "aws_iam_role" "api_gateway_cloudwatch_role" {
+  name = "APIGatewayCloudWatchLogsRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        },
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch_attach" {
+  role       = aws_iam_role.api_gateway_cloudwatch_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+}
+
+resource "aws_api_gateway_account" "main" {
+  cloudwatch_role_arn = aws_iam_role.api_gateway_cloudwatch_role.arn
+}
+
+resource "aws_api_gateway_rest_api" "main-api" {
+  name        = "DocuInsight-Main-API"
+  description = "API Gateway for document search and upload"
+  binary_media_types = ["multipart/form-data"]
+  tags = {
+    Name = "DocuInsight-Main-API"
+  }
+}
+
+resource "aws_api_gateway_resource" "search-resource" {
+  rest_api_id = aws_api_gateway_rest_api.main-api.id
+  parent_id   = aws_api_gateway_rest_api.main-api.root_resource_id
+  path_part   = "search"
+}
+
+resource "aws_api_gateway_method" "search-method" {
+  rest_api_id   = aws_api_gateway_rest_api.main-api.id
+  resource_id   = aws_api_gateway_resource.search-resource.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "search-lambda-integration" {
+  rest_api_id             = aws_api_gateway_rest_api.main-api.id
+  resource_id             = aws_api_gateway_resource.search-resource.id
+  http_method             = aws_api_gateway_method.search-method.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.api-handler-lambda.invoke_arn 
+}
+
+resource "aws_api_gateway_resource" "upload-resource" {
+  rest_api_id = aws_api_gateway_rest_api.main-api.id
+  parent_id   = aws_api_gateway_rest_api.main-api.root_resource_id
+  path_part   = "upload"
+}
+
+resource "aws_api_gateway_method" "upload-method" {
+  rest_api_id   = aws_api_gateway_rest_api.main-api.id
+  resource_id   = aws_api_gateway_resource.upload-resource.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "upload-lambda-integration" {
+  rest_api_id             = aws_api_gateway_rest_api.main-api.id
+  resource_id             = aws_api_gateway_resource.upload-resource.id
+  http_method             = aws_api_gateway_method.upload-method.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.api-handler-lambda.invoke_arn 
+}
+
+resource "aws_api_gateway_deployment" "main-api-deployment" {
+  rest_api_id = aws_api_gateway_rest_api.main-api.id
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.search-resource.id,
+      aws_api_gateway_method.search-method.id,
+      aws_api_gateway_integration.search-lambda-integration.id,
+      aws_api_gateway_resource.upload-resource.id,
+      aws_api_gateway_method.upload-method.id,
+      aws_api_gateway_integration.upload-lambda-integration.id,
+    ]))
+  }
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_cloudwatch_log_group" "api-access-logs" {
+  name              = "/aws/apigateway/DocuInsight-Access-Logs"
+  retention_in_days = 7
+}
+
+
+resource "aws_api_gateway_stage" "main-api-stage" {
+  deployment_id = aws_api_gateway_deployment.main-api-deployment.id
+  rest_api_id   = aws_api_gateway_rest_api.main-api.id
+  stage_name    = "v1"
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api-access-logs.arn
+    format = jsonencode({
+      requestId     = "$context.requestId"
+      ip            = "$context.identity.sourceIp"
+      caller        = "$context.identity.caller"
+      user          = "$context.identity.user"
+      requestTime   = "$context.requestTime"
+      httpMethod    = "$context.httpMethod"
+      resourcePath  = "$context.resourcePath"
+      status        = "$context.status"
+      protocol      = "$context.protocol"
+      responseLength = "$context.responseLength"
+    })
+  }
+  depends_on = [aws_api_gateway_account.main]
+}
+
+
+resource "aws_iam_role" "api-handler-lambda-role" { # Renamed role
+  name = "${var.project_name_prefix}-ApiHandler-Lambda-Role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.project_name_prefix}-ApiHandler-Lambda-Role"
+  }
+}
+
+resource "aws_iam_role_policy" "api-handler-lambda-policy" { # Renamed policy
+  name = "${var.project_name_prefix}-ApiHandler-Lambda-Policy"
+  role = aws_iam_role.api-handler-lambda-role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      },
+      {
+        Action = [
+          "sagemaker:InvokeEndpoint"
+        ],
+        Effect   = "Allow",
+        Resource = aws_sagemaker_endpoint.embeddings-endpoint.arn  # Allow invoking your SageMaker endpoint
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "es:*"
+        ],
+        Resource = [
+          aws_opensearch_domain.document-search-domain.arn,       # Correct resource block name and .arn
+          "${aws_opensearch_domain.document-search-domain.arn}/*" 
+        ]
+      },
+      {
+        Action = [
+          "s3:PutObject"
+        ],
+        Effect   = "Allow",
+        Resource = "${aws_s3_bucket.document-input-bucket.arn}/*" # Allow putting objects into the input bucket
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "api-handler-lambda" { # Renamed Lambda function
+  function_name = "${var.project_name_prefix}-ApiHandler-Lambda"
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.12"
+  role          = aws_iam_role.api-handler-lambda-role.arn 
+  timeout       = 300                                       
+  memory_size   = 256                                      
+
+  filename         = "../src/api_handler_lambda/lambda_function.zip" # New path and filename
+  source_code_hash = filebase64sha256("../src/api_handler_lambda/lambda_function.zip")
+  layers = [
+    aws_lambda_layer_version.numpy-layer.arn
+  ]
+
+  environment {
+    variables = {
+      SAGEMAKER_ENDPOINT_NAME    = aws_sagemaker_endpoint.embeddings-endpoint.name
+      OPENSEARCH_DOMAIN_ENDPOINT = replace(aws_opensearch_domain.document-search-domain.endpoint, "https://", "")
+      LOG_LEVEL                  = "INFO"
+      OPENSEARCH_INDEX_NAME      = "index"
+      S3_INPUT_BUCKET            = aws_s3_bucket.document-input-bucket.bucket
+    }
+  }
+
+  tags = {
+    Name = "DocuInsight-ApiHandler-Lambda"
+  }
+}
+
+resource "aws_lambda_permission" "allow-api-gateway-to-invoke-api-handler-lambda" { # Renamed permission
+  statement_id  = "AllowAPIGatewayInvokeApiHandlerLambda"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.api-handler-lambda.function_name # Updated function name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.main-api.execution_arn}/*/*" # Points to the main_api
+}
+
+output "search_api_endpoint_url" {
+  description = "The URL for the Search API Gateway endpoint"
+  value = "https://${aws_api_gateway_rest_api.main-api.id}.execute-api.us-east-1.amazonaws.com/${aws_api_gateway_stage.main-api-stage.stage_name}/search"
+}
+
+output "upload_api_endpoint_url" {
+  description = "The URL for the Upload API Gateway endpoint"
+  value = "https://${aws_api_gateway_rest_api.main-api.id}.execute-api.us-east-1.amazonaws.com/${aws_api_gateway_stage.main-api-stage.stage_name}/upload"
+}
+
+output "opensearch_endpoint" {
+  value = replace(aws_opensearch_domain.document-search-domain.endpoint, "https://", "")
+}
+
